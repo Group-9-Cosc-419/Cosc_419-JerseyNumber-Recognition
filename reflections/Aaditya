@@ -1,0 +1,110 @@
+## Individual Contribution Log
+
+**Name:** Aaditya Golash  
+**Week:** Week 1 (Feb 13 – Feb 21, 2026)  
+
+---
+
+### Current Tasks  
+* **Task 1: Technical Infrastructure Setup** – Configure initial GitHub repository, establish branch protection (2 reviews required), and integrate Discord webhooks for real-time team updates.  
+* **Task 2: Literature Review & Research** – Conduct in-depth research on the Keyframe Identification (KfID) module based on the Balaji et al. (2023) paper.  
+* **Task 3: Experimental Validation** – Execute baseline model runs on Google Colab and document results/limitations.  
+* **Task 4: Proposal Development (Sections 2 & 5)** – Draft the Literature Review, Replicated Results, Experiment Design, and Evaluation Metrics.  
+
+---
+
+### Progress Update  
+**Status:** In-Progress  
+
+| Task | Status | Evidence (commit, file, PR, screenshot) |
+| :--- | :--- | :--- |
+| **Task 1** | Completed | GitHub Repo established; branch protection & webhooks active. |
+| **Task 2** | Completed | Research presentation on KfID and digit-wise loss submitted. |
+| **Task 3** | Completed | Successful Colab execution logs shared with the team. |
+| **Task 4** | In-Progress | Drafts for Section 2 (Lit Review) and Section 5 (Metrics) initiated. |
+
+---
+
+### Description (What happened?)  
+This week focused on transitioning from initial research to project formalization. I handled the initial technical setup, including repository management, issue assignment via the Kanban board, and branch protection to ensure code integrity. After the first meeting, I selected the **Balaji et al. (2023)** paper for deep research, identifying the **KfID module** as a critical enhancement to filter noisy video tracklets (motion blur and occlusions).  
+
+During Meeting 2, the team presented individual pipeline ideas. I advocated for a system using **digit-wise multi-task loss** to address the model's failure on unseen jersey numbers by predicting tens and ones separately. Following a team vote, we decided to **pivot to a new project proposal repository** and adopt **Leila’s pipeline**, which serves as a combined approach integrating my work on KfID, Enock’s work, and her own architectural improvements. I documented our progress in **Meeting Log 3** and began drafting the formal proposal sections for which I am responsible (Sections 2 and 5).  
+
+---
+
+### Reflection (What did you learn?)  
+I learned that sports video analytics suffer significantly from "tracklet noise" such as motion blur and occlusion. Hard-filtering frames using a KfID module can lead to a massive **~38% relative accuracy increase** compared to baselines. I also gained critical insight into an **MPS kernel bug on Apple Silicon**; I discovered that tensors must be made **contiguous** at initialization to prevent the Adam optimizer from failing silently during training. This technical hurdle reinforced the importance of using **Google Colab** for consistent experimental results across the team.  
+
+---
+
+### Analysis (Why did it happen this way?)  
+The decision to use a **digit-wise multi-task loss** was made because standard holistic classifiers generalize poorly to numbers not seen in the training set. We pivoted to a new repository and a combined pipeline because the individual proposals shared complementary strengths: KfID handles frame-level noise, while multi-task heads address structural digit complexity.  
+
+---
+
+### Conclusions (What insights did you gain?)  
+The most significant insight was that **pre-processing is as critical as the model architecture**; passing raw tracklets to a temporal network without filtering is often a "dead end". Additionally, I realized that while state-of-the-art results are impressive, local replication is often **"difficult to run"** due to environment-specific hardware bugs like the MPS issue.  
+
+---
+
+### Next Week Goals (Action Plan)  
+* **Finalize Section 2:** Complete the summaries of related work and document the replicated results of the baseline model.  
+* **Complete Section 5:** Detail the hardware/software setup and define metrics like **Top-1/Top-5 Accuracy**, Precision, Recall, and F1-score.  
+* **Pipeline Implementation:** Help set up the consolidated architecture in the newly established project repository.
+
+-----------------------
+
+## Individual Contribution Log
+
+**Name:** Aaditya Golash  
+**Week:** Week 2 (Feb 22 - Feb 28, 2026)  
+
+---
+
+### Current Tasks  
+* **Task 1: Section 2 Completion** - Finalize my assigned part of Section 2 in the proposal draft.  
+* **Task 2: Section 5 Completion** - Finalize my assigned part of Section 5 in the proposal draft.  
+* **Task 3: Draft Finalization and Peer Review** - Review teammates' sections and help finalize one complete draft.  
+* **Task 4: Transition Planning** - Prepare for pipeline implementation and divide coding tasks for next week.  
+
+---
+
+### Progress Update  
+**Status:** In-Progress  
+
+| Task | Status | Evidence (commit, file, PR, screenshot) |
+| :--- | :--- | :--- |
+| **Task 1** | Completed | My Section 2 part was completed on Feb 22, 2026. |
+| **Task 2** | Completed | My Section 5 part was completed on Feb 23, 2026. |
+| **Task 3** | In-Progress | Team meeting held on Feb 24, 2026 (5:00 PM-5:30 PM) to finalize draft direction and review all members' parts. |
+| **Task 4** | Planned | Next team meeting set for Feb 25, 2026 at 7:30 PM; full document targeted for submission readiness on Feb 26, 2026. |
+
+---
+
+### Description (What happened?)  
+On **Feb 22, 2026**, I completed my assigned contribution for **Section 2**. On **Feb 23, 2026**, I completed my assigned contribution for **Section 5**.  
+
+During our team meeting on **Feb 24, 2026 (5:00 PM-5:30 PM)**, we decided to focus on finalizing the full draft and reviewing everyone else's sections for consistency, clarity, and completeness. We also aligned on the remaining timeline: a follow-up meeting on **Feb 25, 2026 at 7:30 PM**, and having the final document ready for submission by **Feb 26, 2026**.
+
+---
+
+### Reflection (What did you learn?)  
+I learned that finishing my own sections early made it easier to spend time on cross-review and improve the overall quality of the proposal. I also saw that short, focused team meetings helped us make clear decisions quickly and keep everyone synchronized on deadlines.
+
+---
+
+### Analysis (Why did it happen this way?)  
+This sequence worked because we split work by sections first, then shifted to team-level review once individual writing was done. Completing Section 2 and Section 5 on Feb 22-23 created enough buffer for joint revision before the submission deadline.
+
+---
+
+### Conclusions (What insights did you gain?)  
+The main insight is that proposal quality improves when individual ownership is combined with structured peer review. Early completion of assigned sections reduced last-minute risk and gave the team time to unify writing style and technical clarity.
+
+---
+
+### Next Week Goals (Action Plan)  
+* **Start Pipeline Work:** Begin implementing the agreed pipeline in code.  
+* **Divide Coding Tasks:** Assign clear implementation responsibilities across team members.  
+* **Set Development Workflow:** Establish milestones, branches, and check-in points for coding progress.
+
