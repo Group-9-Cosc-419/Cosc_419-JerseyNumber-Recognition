@@ -44,10 +44,12 @@ def get_soccer_net_raw_legibility_results(args, use_filtered = True, filter = 'g
             images = filtered[directory]
         else:
             images = os.listdir(track_dir)
-        #images = os.listdir(track_dir)
         images_full_path = [os.path.join(track_dir, x) for x in images]
         track_results = lc.run(images_full_path, config.dataset['SoccerNet']['legibility_model'], threshold=-1, arch=config.dataset['SoccerNet']['legibility_model_arch'])
-        results_dict[directory] = track_results
+        results_dict[directory] = {
+            'paths': images_full_path,
+            'scores': track_results
+        }
 
     # save results
     full_legibile_path = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['raw_legible_result'])
@@ -115,6 +117,52 @@ def get_soccer_net_legibility_results(args, use_filtered = False, filter = 'sim'
         outfile.write(json_object)
 
     return legible_tracklets, illegible_tracklets
+
+
+def apply_topk_filtering(legible_dict, raw_scores, K):
+    topk_dict = {}
+    for tracklet_id, image_paths in legible_dict.items():
+        if K <= 0:
+            topk_dict[tracklet_id] = image_paths
+            continue
+
+        if tracklet_id not in raw_scores:
+            topk_dict[tracklet_id] = image_paths
+            continue
+
+        raw_entry = raw_scores[tracklet_id]
+        if isinstance(raw_entry, dict) and 'paths' in raw_entry and 'scores' in raw_entry:
+            raw_paths = raw_entry['paths']
+            raw_scores_list = raw_entry['scores']
+            # Build map from path -> score for exact path match
+            path_to_score = {p: s for p, s in zip(raw_paths, raw_scores_list)}
+            paired = []
+            for p in image_paths:
+                if p in path_to_score:
+                    paired.append((p, path_to_score[p]))
+                else:
+                    # fallback by basename for robustness
+                    basename = os.path.basename(p)
+                    fallback = [s for r, s in zip(raw_paths, raw_scores_list) if os.path.basename(r) == basename]
+                    if len(fallback) > 0:
+                        paired.append((p, fallback[0]))
+            paired.sort(key=lambda x: x[1], reverse=True)
+            selected = [path for path, score in paired[:K]]
+            if len(selected) > 0:
+                topk_dict[tracklet_id] = selected
+            continue
+
+        # legacy: raw entry is list-like and should match in length
+        raw_scores_list = raw_entry
+        if len(image_paths) == len(raw_scores_list):
+            paired = list(zip(image_paths, raw_scores_list))
+            paired.sort(key=lambda x: x[1], reverse=True)
+            selected = [path for path, score in paired[:K]]
+            if len(selected) > 0:
+                topk_dict[tracklet_id] = selected
+        else:
+            topk_dict[tracklet_id] = image_paths
+    return topk_dict
 
 
 def generate_json_for_pose_estimator(args, legible = None):
@@ -279,6 +327,22 @@ def soccer_net_pipeline(args):
             success = False
         print("Done evaluating legibility")
 
+    # 3.75 Apply Top-K Filtering
+    if args.pipeline.get('topk', False) and success:
+        print(f"Applying Top-{args.topk_k} Filtering...")
+        try:
+            raw_scores = get_soccer_net_raw_legibility_results(args, use_filtered=True, filter='gauss', exclude_balls=True)
+            if legible_dict is None:
+                with open(full_legibile_path, 'r') as openfile:
+                    legible_dict = json.load(openfile)
+            legible_dict = apply_topk_filtering(legible_dict, raw_scores, args.topk_k)
+            with open(full_legibile_path, 'w') as outfile:
+                json.dump(legible_dict, outfile)
+            print(f"Done applying Top-{args.topk_k} Filtering")
+        except Exception as e:
+            print(f"Failed during Top-K Filtering: {e}")
+            success = False
+
 
     #4. generate json for pose-estimation
     if args.pipeline['pose'] and success:
@@ -368,6 +432,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset', help="Options: 'SoccerNet', 'Hockey'")
     parser.add_argument('part', help="Options: 'test', 'val', 'train', 'challenge")
     parser.add_argument('--train_str', action='store_true', default=False, help="Run training of jersey number recognition")
+    parser.add_argument('--topk_k', type=int, default=5, help='Number of top frames to keep per tracklet')
     args = parser.parse_args()
 
     if not args.train_str:
@@ -377,6 +442,7 @@ if __name__ == '__main__':
                        "filter": True,
                        "legible": True,
                        "legible_eval": False,
+                       "topk": True,
                        "pose": True,
                        "crops": True,
                        "str": True,
