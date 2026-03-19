@@ -158,7 +158,7 @@ def consolidated_results(image_dir, dict, illegible_path, soccer_ball_list=None)
         if not t in dict.keys():
             dict[t] = -1
         else:
-            dict[t] = int(dict[t])
+          dict[t] = dict[t] if isinstance(dict[t], list) else int(dict[t])
     return dict
 
 def train_parseq(args):
@@ -340,7 +340,8 @@ def soccer_net_pipeline(args):
         #8. combine tracklet results
         analysis_results = None
         #read predicted results, stack unique predictions, sum confidence scores for each, choose argmax
-        results_dict, analysis_results = helpers.process_jersey_id_predictions(str_result_file, useBias=True)
+        TOPK_K = 5  # or whatever K you want
+        results_dict, analysis_results = helpers.process_jersey_id_predictions(str_result_file, useBias=True, topk=TOPK_K)
         #results_dict, analysis_results = helpers.process_jersey_id_predictions_raw(str_result_file, useTS=True)
         #results_dict, analysis_results = helpers.process_jersey_id_predictions_bayesian(str_result_file, useTS=True, useBias=True, useTh=True)
 

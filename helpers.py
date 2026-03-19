@@ -243,14 +243,15 @@ def get_bias(value):
     else:
         return 0.39
 
-SUM_THRESHOLD = 1
-FILTER_THRESHOLD = 0.2
-def find_best_prediction(results, useBias=False):
+SUM_THRESHOLD = 0.5   ###################################3.17
+FILTER_THRESHOLD = 0.1################################################
+def find_best_prediction(results, useBias=False, topk=1):
     if FILTER_THRESHOLD > 0:
         for entry in results:
             if entry[1] < FILTER_THRESHOLD:
                 entry[1] = 0
     unique_predictions = np.unique(results[:, 0])
+    weights = []
     #print(unique_predictions)
     weights = []
     for i in range(len(unique_predictions)):
@@ -261,10 +262,16 @@ def find_best_prediction(results, useBias=False):
         sum_weights = np.sum(adjusted_prob)
         weights.append(sum_weights)
 
+    weights = np.array(weights)
     best_weight = np.max(weights)
     index_of_best = np.argmax(weights)
     best_prediction = unique_predictions[index_of_best] if best_weight > SUM_THRESHOLD else -1
-    return best_prediction, unique_predictions, weights
+
+    # Top-K: get indices of top K weights sorted descending
+    topk_indices = np.argsort(weights)[::-1][:topk]
+    topk_predictions = [int(unique_predictions[i]) for i in topk_indices]
+
+    return best_prediction, unique_predictions, weights, topk_predictions
 
 
 token_list = 'E0123456789'
@@ -533,7 +540,7 @@ def identify_soccer_balls(image_dir, soccer_ball_list):
         json.dump({'ball_tracks': ball_list}, fp)
     return True
 
-def process_jersey_id_predictions(file_path, useBias=False):
+def process_jersey_id_predictions(file_path, useBias=False, topk=1):
     all_results = {}
     final_results = {}
     with open(file_path, 'r') as f:
@@ -541,19 +548,16 @@ def process_jersey_id_predictions(file_path, useBias=False):
     for name in results_dict.keys():
         tmp = name.split('_')
         tracklet = tmp[0]
-
         if tracklet not in all_results:
             all_results[tracklet] = []
-            final_results[tracklet] = -1 #default
+            final_results[tracklet] = -1
         value = results_dict[name]['label']
         if not is_valid_number(value):
             continue
         confidence = results_dict[name]['confidence']
-        # ingore last probability as it corresponds to 'end' token
         total_prob = 1
         for x in confidence[:-1]:
             total_prob = total_prob * float(x)
-
         all_results[tracklet].append([int(value), total_prob])
 
     final_full_results = {}
@@ -562,11 +566,11 @@ def process_jersey_id_predictions(file_path, useBias=False):
             continue
         results = np.array(all_results[tracklet])
 
-        best_prediction, all_unique, weights = find_best_prediction(results, useBias=useBias)
+        best_prediction, all_unique, weights, topk_predictions = find_best_prediction(results, useBias=useBias, topk=topk)
 
-        #best_prediction, all_unique, weights = find_best_prediction_with_vector(results)
-        final_results[tracklet] = str(int(best_prediction))
-        final_full_results[tracklet] = {'label':  str(int(best_prediction)), 'unique': all_unique, 'weights':weights}
+        # Save list if topk > 1, else save single value
+        final_results[tracklet] = topk_predictions if topk > 1 else str(int(best_prediction))
+        final_full_results[tracklet] = {'label': str(int(best_prediction)), 'unique': all_unique, 'weights': weights}
 
     return final_results, final_full_results
 
