@@ -64,8 +64,10 @@ data_transforms = {
 }
 
 class JerseyNumberDataset(Dataset):
-    def __init__(self, annotations_file, img_dir, mode='train'):
-        self.transform = data_transforms[mode]
+    def __init__(self, annotations_file, img_dir, mode='train', arch='resnet34'):
+        if 'resnet' in arch:
+            arch = 'resnet'
+        self.transform = data_transforms[mode][arch]
         self.img_labels = pd.read_csv(annotations_file)
         unqiue_ids = np.unique(self.img_labels.iloc[:, 1].to_numpy())
         print(f"Datafile:{annotations_file}, number of labels:{len(self.img_labels)}, unique ids: {len(unqiue_ids)}")
@@ -83,8 +85,10 @@ class JerseyNumberDataset(Dataset):
         return image, label
 
 class JerseyNumberMultitaskDataset(Dataset):
-    def __init__(self, annotations_file, img_dir, mode='train'):
-        self.transform = data_transforms[mode]
+    def __init__(self, annotations_file, img_dir, mode='train', arch='resnet34'):
+        if 'resnet' in arch:
+            arch = 'resnet'
+        self.transform = data_transforms[mode][arch]
         self.img_labels = pd.read_csv(annotations_file)
         unqiue_ids = np.unique(self.img_labels.iloc[:, 1].to_numpy())
         print(f"Datafile:{annotations_file}, number of labels:{len(self.img_labels)}, unique ids: {len(unqiue_ids)}")
@@ -94,21 +98,25 @@ class JerseyNumberMultitaskDataset(Dataset):
         return len(self.img_labels)
 
     def get_digit_labels(self, label):
+        label = int(label)
+        if not (0 <= label <= 99):
+            raise ValueError(f"Expected jersey label in [0, 99], got {label}")
+
         if label < 10:
-            return label, 10
-        else:
-            return label // 10, label % 10
+            # Single-digit jersey: tens uses blank class index 10.
+            return 10, label
+
+        return label // 10, label % 10
 
     def __getitem__(self, idx):
         img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0])
         image = Image.open(img_path).convert('RGB')
-        label = self.img_labels.iloc[idx, 1]
-        digit1, digit2 = self.get_digit_labels(label)
-        if not (label> 0 and label < 100 and digit1 < 10 and digit1 > 0 and digit2 > -1 and digit2 < 11):
-            print(label, digit1, digit2)
+        label_full = int(self.img_labels.iloc[idx, 1])
+        label_tens, label_ones = self.get_digit_labels(label_full)
+
         if self.transform:
             image = self.transform(image)
-        return image, label, digit1, digit2
+        return image, label_full, label_tens, label_ones
 
 class UnlabelledJerseyNumberLegibilityDataset(Dataset):
     def __init__(self, image_paths, mode='test', arch='resnet18'):
