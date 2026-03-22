@@ -17,25 +17,33 @@ echo "============================================"
 echo "  COSC 419 — Environment Setup"
 echo "============================================"
 
-# ── 0. Detect CUDA version ──
+# ── 0. Detect environment ──
 echo ""
-echo "[0/6] Detecting CUDA version..."
-if command -v nvcc &> /dev/null; then
-    CUDA_VER=$(nvcc --version | grep "release" | sed 's/.*release //' | sed 's/,.*//')
-    echo "  Found CUDA $CUDA_VER"
-else
-    CUDA_VER=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}')
-    echo "  Found CUDA $CUDA_VER (from nvidia-smi)"
+echo "[0/6] Detecting environment..."
+
+# Check if torch is already installed (Colab pre-installs it)
+TORCH_EXISTS=$(python -c "import torch; print('yes')" 2>/dev/null || echo "no")
+
+if [ "$TORCH_EXISTS" = "yes" ]; then
+    echo "  PyTorch already installed — keeping existing version"
+    python -c "import torch; print(f'  torch={torch.__version__} | CUDA={torch.cuda.is_available()}')"
 fi
 
-# ── 1. Install PyTorch (must match CUDA) ──
+# ── 1. Install PyTorch (only if not already present) ──
 echo ""
-echo "[1/6] Installing PyTorch..."
-# Default: CUDA 12.1 (vast.ai default). Change if needed.
-pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121 --quiet
-
-# Verify
-python -c "import torch; print(f'  PyTorch {torch.__version__} | CUDA available: {torch.cuda.is_available()} | Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
+echo "[1/6] PyTorch..."
+if [ "$TORCH_EXISTS" = "yes" ]; then
+    echo "  Skipped (already installed)"
+else
+    # Try GPU first, fall back to CPU
+    echo "  Installing fresh..."
+    if python -c "import subprocess; r=subprocess.run(['nvidia-smi'],capture_output=True); exit(0 if r.returncode==0 else 1)" 2>/dev/null; then
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --quiet
+    else
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+    fi
+    python -c "import torch; print(f'  torch={torch.__version__} | CUDA={torch.cuda.is_available()}')"
+fi
 
 # ── 2. Core dependencies ──
 echo ""
