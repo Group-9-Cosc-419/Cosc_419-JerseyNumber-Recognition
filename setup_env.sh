@@ -49,10 +49,10 @@ fi
 echo ""
 echo "[2/6] Installing core dependencies..."
 pip install \
-    numpy==1.23.5 \
-    scipy==1.11.4 \
+    numpy==1.26.4 \
+    scipy \
     pandas \
-    opencv-python==4.8.1.78 \
+    opencv-python \
     pillow \
     scikit-learn \
     matplotlib \
