@@ -1,0 +1,57 @@
+# ============================================================
+# requirements_phase1_pipeline.txt
+# COSC 419 — Jersey Number Recognition Pipeline (Group 9)
+#
+# Covers: Feature generation, Gaussian filtering, legibility,
+#         Top-K, pose estimation, crops, STR (PARSeq), combine, eval
+#
+# INSTALL ORDER MATTERS — see setup_env.sh for the correct sequence
+# ============================================================
+
+# ── Core (install first) ──
+numpy==1.23.5
+scipy==1.11.4
+pandas
+
+# ── PyTorch (CUDA 11.8 — adjust URL for your GPU) ──
+# Install via: pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+# OR for newer CUDA (e.g. vast.ai with CUDA 12.x):
+#   pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+# Do NOT put torch here — install it manually first to match your CUDA version.
+
+# ── Vision / ML ──
+opencv-python==4.8.1.78
+pillow
+scikit-learn
+matplotlib
+tqdm
+pyyaml
+einops
+lmdb
+shapely
+
+# ── ReID (centroids-reid) ──
+pytorch-lightning==1.9.5
+torchmetrics==0.11.4
+yacs
+
+# ── Pose (ViTPose) ──
+mmcv==1.5.0
+mmdet
+xtcocotools
+chumpy
+json_tricks
+munkres
+
+# ── STR (PARSeq) — NOTE: timm version conflicts with pose ──
+# Install AFTER pose steps are done:
+#   pip install timm==0.6.13 nltk
+# During pose steps, use:
+#   timm==0.4.9
+
+# ── Default timm for everything except STR ──
+timm==0.4.9
+
+# ── Data download ──
+SoccerNet
+gdown
