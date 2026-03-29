@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from torchvision import models
 
 
-def _build_resnet34(pretrained: bool = True) -> nn.Module:
-    """Build a ResNet34 while remaining compatible across torchvision versions."""
-    try:
-        weights = models.ResNet34_Weights.DEFAULT if pretrained else None
-        return models.resnet34(weights=weights)
-    except (AttributeError, TypeError):
-        return models.resnet34(pretrained=pretrained)
+def _build_svtr_encoder(freeze: bool = False):
+    """Load SVTR encoder pretrained on scene text recognition."""
+    import timm
+    encoder = timm.create_model('svtr_tiny', pretrained=True, num_classes=0)
+    feature_dim = encoder.num_features
+    if freeze:
+        for param in encoder.parameters():
+            param.requires_grad = False
+    return encoder, feature_dim
 
 
 class MultiTaskSTRRecognizer(nn.Module):
     """
     Shared-backbone multi-task STR model for jersey number recognition.
+
+    Backbone changed from ResNet-34 (ImageNet, image classification)
+    to SVTR (scene text recognition, pretrained on text data).
 
     Outputs:
     - full head: 100 classes (0-99)
@@ -27,14 +31,7 @@ class MultiTaskSTRRecognizer(nn.Module):
     def __init__(self, pretrained: bool = True, freeze_backbone: bool = False) -> None:
         super().__init__()
 
-        backbone = _build_resnet34(pretrained=pretrained)
-        feature_dim = backbone.fc.in_features
-        backbone.fc = nn.Identity()
-        self.backbone = backbone
-
-        if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
+        self.backbone, feature_dim = _build_svtr_encoder(freeze=freeze_backbone)
 
         self.head_full = nn.Linear(feature_dim, 100)
         self.head_tens = nn.Linear(feature_dim, 11)
@@ -46,4 +43,3 @@ class MultiTaskSTRRecognizer(nn.Module):
         out_tens = self.head_tens(features)
         out_ones = self.head_ones(features)
         return out_full, out_tens, out_ones
-

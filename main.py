@@ -389,13 +389,22 @@ def soccer_net_pipeline(args):
 
     str_result_file = os.path.join(config.dataset['SoccerNet']['working_dir'],
                                    config.dataset['SoccerNet'][args.part]['jersey_id_result'])
-    #7. run STR system on all crops
+    #7. run STR system on all crops (SVTR Multitask)
     if args.pipeline['str'] and success:
-        print("Predict numbers")
-        image_dir = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['crops_folder'])
-
-        command = f"conda run -n {config.str_env} python3 str.py  {config.dataset['SoccerNet']['str_model']}\
-            --data_root={image_dir} --batch_size=1 --inference --result_file {str_result_file}"
+        print("Predict numbers (SVTR Multitask)")
+        crops_organized = os.path.join(
+            config.dataset['SoccerNet']['working_dir'],
+            config.dataset['SoccerNet'][args.part]['crops_folder'],
+            'imgs'
+        )
+        command = (
+            f"/content/bin/micromamba run -n jnp python3 inference_multitask.py "
+            f"--checkpoint checkpoints_svtr/best_multitask_resnet34.pth "
+            f"--data_root {crops_organized} "
+            f"--result_file {str_result_file} "
+            f"--theta 0.5 "
+            f"--batch_size 32"
+        )
         success = os.system(command) == 0
         print("Done predict numbers")
 

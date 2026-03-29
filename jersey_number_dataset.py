@@ -11,9 +11,10 @@ data_transforms = {
     'train': {
         'resnet':
             transforms.Compose([
-            transforms.RandomGrayscale(),
-            transforms.ColorJitter(brightness=.5, hue=.3),
-            transforms.Resize((256, 256)),
+            transforms.Resize((32, 128)),
+            transforms.RandomRotation(degrees=5),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ]),
@@ -30,7 +31,7 @@ data_transforms = {
     'val': {
         'resnet':
             transforms.Compose([
-            transforms.Resize((256, 256)),
+            transforms.Resize((32, 128)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ]),
@@ -41,10 +42,10 @@ data_transforms = {
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
     },
-    'test': {
+     'test': {
         'resnet':
         transforms.Compose([
-        transforms.Resize((256, 256)),
+        transforms.Resize((32, 128)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]),
