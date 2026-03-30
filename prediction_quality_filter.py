@@ -3,7 +3,7 @@ prediction_quality_filter.py — Prediction Quality Filter for Jersey Number Pip
 COSC 419 — Team 9
 
 A post-aggregation module that improves jersey number recognition accuracy through
-two complementary mechanisms:
+four complementary mechanisms:
 
 1. QUALITY FILTER: Rejects low-confidence predictions based on two signals:
    - Aggregated weight: confidence-weighted vote total for the winning prediction
@@ -11,7 +11,17 @@ two complementary mechanisms:
    Predictions where BOTH signals are weak are rejected (marked illegible),
    eliminating false positives where the pipeline guesses without strong evidence.
 
-2. TTA RECOVERY: For tracklets rejected by the quality filter (or the upstream
+2. DIGIT CORRECTION: For tracklets where the top-1 and top-2 predictions differ
+   by exactly one digit (e.g., 30 vs 31) and the vote gap is small, uses PaRSeq's
+   per-position raw softmax distributions to determine the correct digit. Targets
+   common confusion patterns like 30<->31, 27<->17, 36<->16.
+
+3. TEMPORAL CONSISTENCY: For tracklets where the top-1 and top-2 are close,
+   checks whether the runner-up has significantly longer consecutive streaks
+   in the frame sequence. A candidate that appears in long runs is more likely
+   to be the true number than one that appears sporadically.
+
+4. TTA RECOVERY: For tracklets rejected by the quality filter (or the upstream
    legibility classifier), runs PaRSeq inference with test-time augmentations
    (horizontal flip, brightness, contrast, rotation) to generate additional
    predictions. Recovered predictions are accepted only if the TTA consensus
@@ -22,7 +32,7 @@ Combined improvement: 87.12% -> 88.52% (+17 tracklets) on SoccerNet test set.
 Usage:
     from prediction_quality_filter import quality_filtered_predictions, tta_recovery
 
-    # Step 1: Quality-filtered aggregation
+    # Step 1: Quality-filtered aggregation with digit correction & temporal consistency
     predictions = quality_filtered_predictions(
         parseq_result_file="out/SoccerNetResults/jersey_id_results.json",
     )
@@ -60,6 +70,15 @@ DEFAULT_TOPK_FRAMES   = 50
 DEFAULT_TTA_MIN_AGREE  = 0.6
 DEFAULT_TTA_MIN_WEIGHT = 3.0
 
+# Digit correction defaults
+DEFAULT_DIGIT_GAP_THRESH = 0.4    # Only correct when vote gap < this
+DEFAULT_DIGIT_RAW_RATIO  = 1.0    # Raw distribution must prefer alternative by this factor
+
+# Temporal consistency defaults
+DEFAULT_TEMPORAL_GAP_THRESH  = 0.5   # Only check when vote gap < this
+DEFAULT_TEMPORAL_STREAK_FACTOR = 1.2 # Top-2 streak must exceed top-1 by this factor
+DEFAULT_TEMPORAL_MIN_STREAK  = 3     # Minimum streak length to trigger override
+
 
 def is_valid_number(value):
     """Check whether a PaRSeq label is a valid jersey number (1-99)."""
@@ -74,12 +93,29 @@ def is_valid_number(value):
 
 
 def _group_frames_by_tracklet(result_file):
-    """Read PaRSeq per-frame predictions and group by tracklet."""
+    """Read PaRSeq per-frame predictions and group by tracklet.
+
+    Returns
+    -------
+    tracklets : dict[str, list[tuple[int, float]]]
+        Mapping from tracklet ID to list of (predicted_number, confidence).
+    raw_dists : dict[str, list[np.ndarray]]
+        Mapping from tracklet ID to list of raw softmax distributions (3x11).
+        Empty if the result file does not contain 'raw' fields.
+    frame_order : dict[str, list[tuple[int, float]]]
+        Same as tracklets but preserving the original filename order
+        (for temporal consistency analysis).
+    """
     with open(result_file, 'r') as f:
         results_dict = json.load(f)
 
     tracklets = defaultdict(list)
-    for name, val in results_dict.items():
+    raw_dists = defaultdict(list)
+    # Preserve frame order by sorting by filename
+    sorted_names = sorted(results_dict.keys())
+
+    for name in sorted_names:
+        val = results_dict[name]
         tid = name.split('_')[0]
         label = val['label']
         if not is_valid_number(label):
@@ -88,8 +124,10 @@ def _group_frames_by_tracklet(result_file):
         for x in val['confidence'][:-1]:
             total_prob *= float(x)
         tracklets[tid].append((int(label), total_prob))
+        if 'raw' in val:
+            raw_dists[tid].append(np.array(val['raw']))
 
-    return tracklets
+    return tracklets, raw_dists
 
 
 def _aggregate_tracklet(frames, topk_frames=0,
@@ -123,24 +161,138 @@ def _aggregate_tracklet(frames, topk_frames=0,
     return best_label, best_weight, agreement, n_total
 
 
+def _differ_by_one_digit(a, b):
+    """Check if two jersey numbers differ in exactly one digit position."""
+    if a < 10 and b < 10:
+        return True  # both single digit
+    if a < 10 or b < 10:
+        return False  # one single, one double
+    # Both two-digit
+    a_tens, a_ones = a // 10, a % 10
+    b_tens, b_ones = b // 10, b % 10
+    return (a_tens == b_tens) != (a_ones == b_ones)
+
+
+def _digit_correction(top1, top2, raw_dists_list, raw_ratio=DEFAULT_DIGIT_RAW_RATIO):
+    """
+    Use per-position raw softmax distributions to resolve one-digit confusion.
+
+    If top-1 and top-2 differ in exactly one digit position (tens or ones),
+    averages the raw distributions across all frames and checks which digit
+    has higher probability at the differing position.
+
+    Returns the corrected prediction, or top1 if no correction is warranted.
+    """
+    if not raw_dists_list or not _differ_by_one_digit(top1, top2):
+        return top1
+
+    avg_raw = np.mean(raw_dists_list, axis=0)  # (3, 11)
+    # Token mapping: index 0 = E (end/single-digit marker), index d+1 = digit d
+
+    if top1 >= 10 and top2 >= 10:
+        if top1 // 10 == top2 // 10:
+            # Same tens, different ones
+            d1, d2 = top1 % 10, top2 % 10
+            p1 = avg_raw[1][d1 + 1]
+            p2 = avg_raw[1][d2 + 1]
+        else:
+            # Different tens, same ones
+            d1, d2 = top1 // 10, top2 // 10
+            p1 = avg_raw[0][d1 + 1]
+            p2 = avg_raw[0][d2 + 1]
+    elif top1 < 10 and top2 < 10:
+        # Both single digit — compare ones position
+        p1 = avg_raw[1][top1 + 1]
+        p2 = avg_raw[1][top2 + 1]
+    else:
+        return top1  # single vs double digit — don't correct
+
+    if p2 > p1 * raw_ratio:
+        return top2
+    return top1
+
+
+def _temporal_consistency(top1_label, top2_label, frame_labels,
+                          streak_factor=DEFAULT_TEMPORAL_STREAK_FACTOR,
+                          min_streak=DEFAULT_TEMPORAL_MIN_STREAK):
+    """
+    Check if the runner-up prediction has better temporal consistency.
+
+    Computes the longest consecutive run (streak) for both top-1 and top-2
+    in the frame sequence. If top-2 has a significantly longer streak,
+    it's more likely to be the true jersey number.
+
+    Returns the corrected prediction.
+    """
+    def max_streak(seq, value):
+        best = current = 0
+        for s in seq:
+            if s == value:
+                current += 1
+                best = max(best, current)
+            else:
+                current = 0
+        return best
+
+    s1 = max_streak(frame_labels, top1_label)
+    s2 = max_streak(frame_labels, top2_label)
+
+    if s2 > s1 * streak_factor and s2 >= min_streak:
+        return int(top2_label)
+    return int(top1_label)
+
+
 def quality_filtered_predictions(parseq_result_file,
                                  weight_thresh=DEFAULT_WEIGHT_THRESH,
                                  agree_thresh=DEFAULT_AGREE_THRESH,
                                  topk_frames=DEFAULT_TOPK_FRAMES,
                                  sum_thresh=SUM_THRESHOLD,
                                  bias_2d=BIAS_TWO_DIGIT,
-                                 bias_1d=BIAS_ONE_DIGIT):
+                                 bias_1d=BIAS_ONE_DIGIT,
+                                 enable_digit_correction=True,
+                                 digit_gap_thresh=DEFAULT_DIGIT_GAP_THRESH,
+                                 digit_raw_ratio=DEFAULT_DIGIT_RAW_RATIO,
+                                 enable_temporal=True,
+                                 temporal_gap_thresh=DEFAULT_TEMPORAL_GAP_THRESH,
+                                 temporal_streak_factor=DEFAULT_TEMPORAL_STREAK_FACTOR,
+                                 temporal_min_streak=DEFAULT_TEMPORAL_MIN_STREAK):
     """
-    Run PaRSeq aggregation with a two-dimensional quality filter.
+    Run PaRSeq aggregation with quality filter, digit correction, and
+    temporal consistency.
 
-    A prediction is emitted only if:
-      (a) its aggregated weight exceeds sum_thresh (Koshkina baseline), AND
-      (b) it passes the quality gate:
-            weight >= weight_thresh  OR  agreement >= agree_thresh
+    Pipeline:
+      1. Quality gate: reject if weight < weight_thresh AND agreement < agree_thresh
+      2. Digit correction: for close top-1/top-2 that differ by one digit,
+         use raw softmax distributions to pick the correct digit
+      3. Temporal consistency: for close top-1/top-2, prefer the candidate
+         with longer consecutive streaks in the frame sequence
 
-    Predictions that fail both (b) conditions are rejected as illegible (-1).
+    Parameters
+    ----------
+    parseq_result_file : str
+        Path to PaRSeq per-frame predictions JSON.
+    weight_thresh : float
+        Minimum aggregated weight to pass without high agreement. Default 3.5.
+    agree_thresh : float
+        Minimum frame agreement to pass without high weight. Default 0.8.
+    topk_frames : int
+        If > 0, use only the top-K most confident frames. Default 50.
+    enable_digit_correction : bool
+        Whether to apply digit-level correction using raw distributions. Default True.
+    digit_gap_thresh : float
+        Maximum vote gap to trigger digit correction. Default 0.4.
+    digit_raw_ratio : float
+        Raw probability ratio required to override. Default 1.0.
+    enable_temporal : bool
+        Whether to apply temporal consistency override. Default True.
+    temporal_gap_thresh : float
+        Maximum vote gap to trigger temporal check. Default 0.5.
+    temporal_streak_factor : float
+        Top-2 streak must exceed top-1 streak by this factor. Default 1.2.
+    temporal_min_streak : int
+        Minimum streak length for top-2 to trigger override. Default 3.
     """
-    tracklets = _group_frames_by_tracklet(parseq_result_file)
+    tracklets, raw_dists = _group_frames_by_tracklet(parseq_result_file)
     results = {}
 
     for tid, frames in tracklets.items():
@@ -148,18 +300,60 @@ def quality_filtered_predictions(parseq_result_file,
             results[tid] = '-1'
             continue
 
+        # Full frame sequence (before top-K) for temporal analysis
+        full_frame_labels = [f[0] for f in frames]
+
         best_label, best_weight, agreement, n_frames = _aggregate_tracklet(
             frames, topk_frames=topk_frames, bias_2d=bias_2d, bias_1d=bias_1d
         )
 
+        # Stage 1: Hard threshold (Koshkina baseline)
         if best_weight < sum_thresh:
             results[tid] = '-1'
             continue
 
+        # Stage 2: Quality gate — reject only if BOTH signals are weak
         if best_weight < weight_thresh and agreement < agree_thresh:
             results[tid] = '-1'
-        else:
-            results[tid] = str(best_label)
+            continue
+
+        # Compute top-2 for correction stages
+        arr = np.array(frames)
+        if topk_frames > 0 and len(arr) > topk_frames:
+            sorted_idx = np.argsort(arr[:, 1])[::-1]
+            arr = arr[sorted_idx[:topk_frames]]
+        work = arr.copy()
+        work[work[:, 1] < FILTER_THRESHOLD, 1] = 0.0
+        unique_labels = np.unique(work[:, 0])
+        weights = {}
+        for v in unique_labels:
+            rows = work[work[:, 0] == v]
+            bias = bias_2d if v > 9 else bias_1d
+            weights[v] = float(np.sum(rows[:, 1] * bias))
+        sorted_w = sorted(weights.items(), key=lambda x: -x[1])
+
+        chosen = int(best_label)
+        top1_w = sorted_w[0][1]
+        top2_label = int(sorted_w[1][0]) if len(sorted_w) > 1 else -1
+        top2_w = sorted_w[1][1] if len(sorted_w) > 1 else 0
+        gap = (top1_w - top2_w) / top1_w if top1_w > 0 else 1.0
+
+        # Stage 3: Digit correction using raw distributions
+        if enable_digit_correction and gap < digit_gap_thresh and top2_label > 0:
+            tid_raws = raw_dists.get(tid, [])
+            if tid_raws:
+                chosen = _digit_correction(chosen, top2_label, tid_raws,
+                                           raw_ratio=digit_raw_ratio)
+
+        # Stage 4: Temporal consistency override
+        if enable_temporal and gap < temporal_gap_thresh and top2_label > 0:
+            chosen = _temporal_consistency(
+                chosen, top2_label, full_frame_labels,
+                streak_factor=temporal_streak_factor,
+                min_streak=temporal_min_streak,
+            )
+
+        results[tid] = str(chosen)
 
     return results
 
@@ -398,14 +592,20 @@ if __name__ == '__main__':
                         help='Path to PaRSeq checkpoint (required for TTA)')
     parser.add_argument('--tta-min-agree', type=float, default=DEFAULT_TTA_MIN_AGREE)
     parser.add_argument('--tta-min-weight', type=float, default=DEFAULT_TTA_MIN_WEIGHT)
+    parser.add_argument('--no-digit-correction', action='store_true', default=False,
+                        help='Disable digit correction using raw distributions')
+    parser.add_argument('--no-temporal', action='store_true', default=False,
+                        help='Disable temporal consistency override')
     args = parser.parse_args()
 
-    # Step 1: Quality-filtered aggregation
+    # Step 1: Quality-filtered aggregation with digit correction & temporal consistency
     predictions = quality_filtered_predictions(
         args.result_file,
         weight_thresh=args.weight_thresh,
         agree_thresh=args.agree_thresh,
         topk_frames=args.topk_frames,
+        enable_digit_correction=not args.no_digit_correction,
+        enable_temporal=not args.no_temporal,
     )
 
     rejected = sum(1 for v in predictions.values() if v == '-1')
