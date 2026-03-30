@@ -387,6 +387,27 @@ def soccer_net_pipeline(args):
             success = False
         print("Done generating crops")
 
+        # 6.5 Organize crops by tracklet (needed for TTA recovery in combine step)
+        if success:
+            print("Organizing crops by tracklet")
+            try:
+                crops_bt_dir = os.path.join(config.dataset['SoccerNet']['working_dir'],
+                                            config.dataset['SoccerNet'][args.part]['crops_folder'], 'by_tracklet')
+                Path(crops_bt_dir).mkdir(parents=True, exist_ok=True)
+                for fname in os.listdir(crops_destination_dir):
+                    if not fname.endswith('.jpg'):
+                        continue
+                    tid = fname.split('_')[0]
+                    tid_dir = os.path.join(crops_bt_dir, tid)
+                    Path(tid_dir).mkdir(exist_ok=True)
+                    src = os.path.abspath(os.path.join(crops_destination_dir, fname))
+                    dst = os.path.join(tid_dir, fname)
+                    if not os.path.exists(dst):
+                        os.symlink(src, dst)
+                print(f"Done organizing crops by tracklet ({len(os.listdir(crops_bt_dir))} tracklets)")
+            except Exception as e:
+                print(f"Warning: could not organize crops by tracklet: {e}")
+
     str_result_file = os.path.join(config.dataset['SoccerNet']['working_dir'],
                                    config.dataset['SoccerNet'][args.part]['jersey_id_result'])
     #7. run STR system on all crops
@@ -494,3 +515,5 @@ if __name__ == '__main__':
             print("Unknown dataset")
     else:
         train_parseq(args)
+
+
