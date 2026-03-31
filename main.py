@@ -44,10 +44,12 @@ def get_soccer_net_raw_legibility_results(args, use_filtered = True, filter = 'g
             images = filtered[directory]
         else:
             images = os.listdir(track_dir)
-        #images = os.listdir(track_dir)
         images_full_path = [os.path.join(track_dir, x) for x in images]
         track_results = lc.run(images_full_path, config.dataset['SoccerNet']['legibility_model'], threshold=-1, arch=config.dataset['SoccerNet']['legibility_model_arch'])
-        results_dict[directory] = track_results
+        results_dict[directory] = {
+            'paths': images_full_path,
+            'scores': track_results
+        }
 
     # save results
     full_legibile_path = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['raw_legible_result'])
@@ -115,6 +117,52 @@ def get_soccer_net_legibility_results(args, use_filtered = False, filter = 'sim'
         outfile.write(json_object)
 
     return legible_tracklets, illegible_tracklets
+
+
+def apply_topk_filtering(legible_dict, raw_scores, K):
+    topk_dict = {}
+    for tracklet_id, image_paths in legible_dict.items():
+        if K <= 0:
+            topk_dict[tracklet_id] = image_paths
+            continue
+
+        if tracklet_id not in raw_scores:
+            topk_dict[tracklet_id] = image_paths
+            continue
+
+        raw_entry = raw_scores[tracklet_id]
+        if isinstance(raw_entry, dict) and 'paths' in raw_entry and 'scores' in raw_entry:
+            raw_paths = raw_entry['paths']
+            raw_scores_list = raw_entry['scores']
+            # Build map from path -> score for exact path match
+            path_to_score = {p: s for p, s in zip(raw_paths, raw_scores_list)}
+            paired = []
+            for p in image_paths:
+                if p in path_to_score:
+                    paired.append((p, path_to_score[p]))
+                else:
+                    # fallback by basename for robustness
+                    basename = os.path.basename(p)
+                    fallback = [s for r, s in zip(raw_paths, raw_scores_list) if os.path.basename(r) == basename]
+                    if len(fallback) > 0:
+                        paired.append((p, fallback[0]))
+            paired.sort(key=lambda x: x[1], reverse=True)
+            selected = [path for path, score in paired[:K]]
+            if len(selected) > 0:
+                topk_dict[tracklet_id] = selected
+            continue
+
+        # legacy: raw entry is list-like and should match in length
+        raw_scores_list = raw_entry
+        if len(image_paths) == len(raw_scores_list):
+            paired = list(zip(image_paths, raw_scores_list))
+            paired.sort(key=lambda x: x[1], reverse=True)
+            selected = [path for path, score in paired[:K]]
+            if len(selected) > 0:
+                topk_dict[tracklet_id] = selected
+        else:
+            topk_dict[tracklet_id] = image_paths
+    return topk_dict
 
 
 def generate_json_for_pose_estimator(args, legible = None):
@@ -217,7 +265,7 @@ def soccer_net_pipeline(args):
     Path(config.dataset['SoccerNet']['working_dir']).mkdir(parents=True, exist_ok=True)
     success = True
 
-    image_dir = os.path.join(config.dataset['SoccerNet']['root_dir'], config.dataset['SoccerNet'][args.part]['images'])
+    tracklet_image_dir = os.path.join(config.dataset['SoccerNet']['root_dir'], config.dataset['SoccerNet'][args.part]['images'])
     soccer_ball_list = os.path.join(config.dataset['SoccerNet']['working_dir'],
                                       config.dataset['SoccerNet'][args.part]['soccer_ball_list'])
     features_dir = config.dataset['SoccerNet'][args.part]['feature_output_folder']
@@ -235,20 +283,20 @@ def soccer_net_pipeline(args):
     # 1. Filter out soccer ball based on images size
     if args.pipeline['soccer_ball_filter']:
         print("Determine soccer ball")
-        success = helpers.identify_soccer_balls(image_dir, soccer_ball_list)
+        success = helpers.identify_soccer_balls(tracklet_image_dir, soccer_ball_list)
         print("Done determine soccer ball")
 
     # 1. generate and store features for each image in each tracklet
     if args.pipeline['feat']:
         print("Generate features")
-        command = f"conda run -n {config.reid_env} python3 {config.reid_script} --tracklets_folder {image_dir} --output_folder {features_dir}"
+        command = f"conda run -n {config.reid_env} python3 {config.reid_script} --tracklets_folder {tracklet_image_dir} --output_folder {features_dir}"
         success = os.system(command) == 0
         print("Done generating features")
 
     #2. identify and remove outliers based on features
     if args.pipeline['filter'] and success:
         print("Identify and remove outliers")
-        command = f"python3 gaussian_outliers.py --tracklets_folder {image_dir} --output_folder {features_dir}"
+        command = f"python3 gaussian_outliers.py --tracklets_folder {tracklet_image_dir} --output_folder {features_dir}"
         success = os.system(command) == 0
         print("Done removing outliers")
 
@@ -278,6 +326,22 @@ def soccer_net_pipeline(args):
             print(e)
             success = False
         print("Done evaluating legibility")
+
+    # 3.75 Apply Top-K Filtering
+    if args.pipeline.get('topk', False) and success:
+        print(f"Applying Top-{args.topk_k} Filtering...")
+        try:
+            raw_scores = get_soccer_net_raw_legibility_results(args, use_filtered=True, filter='gauss', exclude_balls=True)
+            if legible_dict is None:
+                with open(full_legibile_path, 'r') as openfile:
+                    legible_dict = json.load(openfile)
+            legible_dict = apply_topk_filtering(legible_dict, raw_scores, args.topk_k)
+            with open(full_legibile_path, 'w') as outfile:
+                json.dump(legible_dict, outfile)
+            print(f"Done applying Top-{args.topk_k} Filtering")
+        except Exception as e:
+            print(f"Failed during Top-K Filtering: {e}")
+            success = False
 
 
     #4. generate json for pose-estimation
@@ -323,34 +387,89 @@ def soccer_net_pipeline(args):
             success = False
         print("Done generating crops")
 
+        # 6.5 Organize crops by tracklet (needed for TTA recovery in combine step)
+        if success:
+            print("Organizing crops by tracklet")
+            try:
+                crops_bt_dir = os.path.join(config.dataset['SoccerNet']['working_dir'],
+                                            config.dataset['SoccerNet'][args.part]['crops_folder'], 'by_tracklet')
+                Path(crops_bt_dir).mkdir(parents=True, exist_ok=True)
+                for fname in os.listdir(crops_destination_dir):
+                    if not fname.endswith('.jpg'):
+                        continue
+                    tid = fname.split('_')[0]
+                    tid_dir = os.path.join(crops_bt_dir, tid)
+                    Path(tid_dir).mkdir(exist_ok=True)
+                    src = os.path.abspath(os.path.join(crops_destination_dir, fname))
+                    dst = os.path.join(tid_dir, fname)
+                    if not os.path.exists(dst):
+                        os.symlink(src, dst)
+                print(f"Done organizing crops by tracklet ({len(os.listdir(crops_bt_dir))} tracklets)")
+            except Exception as e:
+                print(f"Warning: could not organize crops by tracklet: {e}")
+
     str_result_file = os.path.join(config.dataset['SoccerNet']['working_dir'],
                                    config.dataset['SoccerNet'][args.part]['jersey_id_result'])
     #7. run STR system on all crops
+    str_image_dir = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['crops_folder'])
+
     if args.pipeline['str'] and success:
         print("Predict numbers")
-        image_dir = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['crops_folder'])
-
         command = f"conda run -n {config.str_env} python3 str.py  {config.dataset['SoccerNet']['str_model']}\
-            --data_root={image_dir} --batch_size=1 --inference --result_file {str_result_file}"
+            --data_root={str_image_dir} --batch_size=1 --inference --result_file {str_result_file}"
         success = os.system(command) == 0
         print("Done predict numbers")
 
     #str_result_file = os.path.join(config.dataset['SoccerNet']['working_dir'], "val_jersey_id_predictions.json")
     if args.pipeline['combine'] and success:
-        #8. combine tracklet results
-        analysis_results = None
-        #read predicted results, stack unique predictions, sum confidence scores for each, choose argmax
-        results_dict, analysis_results = helpers.process_jersey_id_predictions(str_result_file, useBias=True)
-        #results_dict, analysis_results = helpers.process_jersey_id_predictions_raw(str_result_file, useTS=True)
-        #results_dict, analysis_results = helpers.process_jersey_id_predictions_bayesian(str_result_file, useTS=True, useBias=True, useTh=True)
+        from prediction_quality_filter import (
+            quality_filtered_predictions,
+            tta_recovery,
+            consolidated_results as qf_consolidated,
+        )
 
-        # add illegible tracklet predictions
-        consolidated_dict = consolidated_results(image_dir, results_dict, illegible_path, soccer_ball_list=soccer_ball_list)
+        print("Combine predictions with quality filter + TTA recovery")
+        results_dict = quality_filtered_predictions(
+            str_result_file,
+            weight_thresh=3.5,
+            agree_thresh=0.8,
+            topk_frames=50,
+        )
 
-        #save results as json
-        final_results_path = os.path.join(config.dataset['SoccerNet']['working_dir'], config.dataset['SoccerNet'][args.part]['final_result'])
+        crops_by_tracklet_dir = os.path.join(
+            config.dataset['SoccerNet']['working_dir'],
+            config.dataset['SoccerNet'][args.part]['crops_folder'],
+            'by_tracklet',
+        )
+
+        if os.path.isdir(crops_by_tracklet_dir):
+            try:
+                results_dict = tta_recovery(
+                    results_dict,
+                    crops_dir=crops_by_tracklet_dir,
+                    parseq_checkpoint=config.dataset['SoccerNet']['str_model'],
+                    tta_min_agree=0.6,
+                    tta_min_weight=3.0,
+                )
+            except Exception as e:
+                print(f"TTA recovery failed: {e}")
+        else:
+            print(f"Skipping TTA recovery: missing directory {crops_by_tracklet_dir}")
+
+        consolidated_dict = qf_consolidated(
+            tracklet_image_dir,  # defined at line 268 in soccer_net_pipeline
+            results_dict,
+            illegible_path,
+            soccer_ball_list=soccer_ball_list,
+        )
+
+        final_results_path = os.path.join(
+            config.dataset['SoccerNet']['working_dir'],
+            config.dataset['SoccerNet'][args.part]['final_result'],
+        )
         with open(final_results_path, 'w') as f:
             json.dump(consolidated_dict, f)
+        print(f"Saved final results to {final_results_path}")
 
     if args.pipeline['eval'] and success:
         #9. evaluate accuracy
@@ -360,6 +479,7 @@ def soccer_net_pipeline(args):
         with open(gt_path, 'r') as gf:
             gt_dict = json.load(gf)
         print(len(consolidated_dict.keys()), len(gt_dict.keys()))
+        analysis_results = None
         helpers.evaluate_results(consolidated_dict, gt_dict, full_results = analysis_results)
 
 
@@ -368,6 +488,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset', help="Options: 'SoccerNet', 'Hockey'")
     parser.add_argument('part', help="Options: 'test', 'val', 'train', 'challenge")
     parser.add_argument('--train_str', action='store_true', default=False, help="Run training of jersey number recognition")
+    parser.add_argument('--topk_k', type=int, default=0, help='Number of top frames to keep per tracklet (0=disabled)')
     args = parser.parse_args()
 
     if not args.train_str:
@@ -377,6 +498,7 @@ if __name__ == '__main__':
                        "filter": True,
                        "legible": True,
                        "legible_eval": False,
+                       "topk": False,
                        "pose": True,
                        "crops": True,
                        "str": True,
