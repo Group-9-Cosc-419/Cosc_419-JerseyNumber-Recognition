@@ -1,0 +1,10 @@
+------------------------------
+EVALUATION RESULTS
+------------------------------
+Total Samples (GT):    1211
+Predictions Provided:  1211
+Correct Predictions:   1072
+Missing Predictions:   0
+------------------------------
+FINAL ACCURACY:        88.52%
+------------------------------
